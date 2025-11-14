@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Github, Linkedin, Mail, Phone, ExternalLink, Code2, Award, Users, ChevronDown, Terminal, Star, GitFork, Calendar, Trophy, Target, Book, FileText, ChevronLeft, ChevronRight, Moon, Sun, Zap, PartyPopper } from 'lucide-react';
+import  { useState, useEffect } from 'react';
+import { Github, Linkedin, Mail, Phone, ExternalLink, Code2, Users, ChevronDown, Terminal, Star, GitFork, Calendar, Trophy, Target, Book, FileText, ChevronLeft, ChevronRight, Moon, Sun, Zap } from 'lucide-react';
 
 interface GithubRepo {
   id: number;
