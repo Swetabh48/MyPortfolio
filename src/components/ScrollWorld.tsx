@@ -118,6 +118,8 @@ function Character({ mood, workSide, dragYawRef, bodyXRef, focusRef, pointerRef 
   const settledIdle = useRef<string | null>(null);
   const phoneRef = useRef<THREE.Mesh | null>(null);
   const phoneUntil = useRef(0);
+  const danceUntil = useRef(0);
+  const danceStep = useRef(0);
   const leftArmRef = useRef<Bone | null>(null);
   const rightArmRef = useRef<Bone | null>(null);
   const pointTarget = useRef(new THREE.Vector3());
@@ -138,6 +140,18 @@ function Character({ mood, workSide, dragYawRef, bodyXRef, focusRef, pointerRef 
     return pool.length > 0 ? pool : [names[0]];
   }, [clipName, names]);
   const walkName = useMemo(() => clipName(/Walk/i), [clipName]);
+  const danceClips = useMemo(
+    () =>
+      [
+        clipName(/Wave/i),
+        clipName(/Kick_Left/i),
+        clipName(/Kick_Right/i),
+        clipName(/Wave/i),
+        clipName(/Punch_Left/i),
+        clipName(/Kick_Right/i),
+      ].filter((name): name is string => Boolean(name)),
+    [clipName],
+  );
 
   /** The head bone is driven on top of the clip so he can watch the visitor. */
   const headBoneRef = useRef<Bone | null>(null);
@@ -232,38 +246,72 @@ function Character({ mood, workSide, dragYawRef, bodyXRef, focusRef, pointerRef 
 
   /** One-shot gesture that always hands control back to the looping base. */
   const playReaction = useCallback(
-    (matcher: RegExp) => {
+    (matcher: RegExp, options?: { force?: boolean; timeScale?: number }) => {
       const name = clipName(matcher);
       const action = name ? actions[name] : undefined;
-      if (!name || !action || oneShot.current) return;
+      if (!name || !action) return;
+      if (oneShot.current && !options?.force) return;
+
+      if (oneShot.current) oneShot.current.action.fadeOut(0.12);
 
       action.reset();
       action.setLoop(THREE.LoopOnce, 1);
-      action.setEffectiveTimeScale(1);
-      action.fadeIn(0.18).play();
+      action.setEffectiveTimeScale(options?.timeScale ?? 1);
+      action.fadeIn(0.14).play();
 
-      if (baseClip.current) actions[baseClip.current]?.fadeOut(0.18);
+      if (baseClip.current) actions[baseClip.current]?.fadeOut(0.14);
       oneShot.current = { action };
     },
     [actions, clipName],
   );
 
+  const playDanceStep = useCallback(() => {
+    if (danceClips.length === 0) return;
+    const name = danceClips[danceStep.current % danceClips.length];
+    const action = actions[name];
+    if (!action) return;
+
+    if (oneShot.current) oneShot.current.action.fadeOut(0.1);
+    action.reset();
+    action.setLoop(THREE.LoopOnce, 1);
+    action.setEffectiveTimeScale(1.15);
+    action.fadeIn(0.1).play();
+    if (baseClip.current) actions[baseClip.current]?.fadeOut(0.1);
+    oneShot.current = { action };
+    danceStep.current += 1;
+  }, [actions, danceClips]);
+
+  const startDance = useCallback(
+    (durationMs = 5000) => {
+      danceUntil.current = performance.now() + durationMs;
+      danceStep.current = 0;
+      nextIdleBreak.current = performance.now() + durationMs + 8000;
+      playDanceStep();
+    },
+    [playDanceStep],
+  );
+
   useEffect(() => {
     const onReact = (event: Event) => {
       const detail = (event as CustomEvent<Reaction>).detail;
-      if (detail.kind === 'greet' || detail.kind === 'surprise') playReaction(/Wave/i);
+      if (detail.kind === 'surprise') {
+        startDance(5000);
+        return;
+      }
+      if (detail.kind === 'greet') playReaction(/Wave/i);
       if (detail.kind === 'focus') playReaction(/Interact/i);
       nextIdleBreak.current = performance.now() + 9000;
     };
     window.addEventListener(REACT_EVENT, onReact);
     return () => window.removeEventListener(REACT_EVENT, onReact);
-  }, [playReaction]);
+  }, [playReaction, startDance]);
 
   useFrame((state, delta) => {
     if (!root.current) return;
     const now = performance.now();
     const pointer = pointerRef.current;
-    const checkingPhone = now < phoneUntil.current;
+    const dancing = now < danceUntil.current;
+    const checkingPhone = !dancing && now < phoneUntil.current;
     if (phoneRef.current) phoneRef.current.visible = checkingPhone;
 
     // Retire a finished gesture instead of freezing on its last frame.
@@ -271,10 +319,14 @@ function Character({ mood, workSide, dragYawRef, bodyXRef, focusRef, pointerRef 
     if (active) {
       const clip = active.action.getClip();
       if (!active.action.isRunning() || active.action.time >= clip.duration - 0.06) {
-        active.action.fadeOut(0.24);
-        const base = baseClip.current ? actions[baseClip.current] : undefined;
-        base?.reset().fadeIn(0.26).play();
+        active.action.fadeOut(0.16);
         oneShot.current = null;
+        if (dancing) {
+          playDanceStep();
+        } else {
+          const base = baseClip.current ? actions[baseClip.current] : undefined;
+          base?.reset().fadeIn(0.26).play();
+        }
       }
     }
 
@@ -282,26 +334,29 @@ function Character({ mood, workSide, dragYawRef, bodyXRef, focusRef, pointerRef 
     cursor.current.y = THREE.MathUtils.lerp(cursor.current.y, pointer.y, 0.06);
 
     const focus = focusRef.current;
-    const focused = Boolean(focus) && now < focus.until;
+    const focused = Boolean(focus) && now < focus.until && !dancing;
 
     const anchor = anchorFor(mood, workSide);
     const targetX = anchor + cursor.current.x * 0.16;
     const previousX = root.current.position.x;
     root.current.position.x = THREE.MathUtils.damp(previousX, targetX, 2.4, delta);
-    root.current.position.y = GROUND_Y;
+    // Light hop while celebrating so the chained kicks/waves read as a dance.
+    root.current.position.y = dancing
+      ? GROUND_Y + Math.abs(Math.sin(now * 0.014)) * 0.09
+      : GROUND_Y;
     bodyXRef.current = root.current.position.x;
 
     const travel = (root.current.position.x - previousX) / Math.max(delta, 0.0001);
     // Measured against the anchor, so cursor sway never reads as travelling.
-    const walking = Math.abs(anchor - root.current.position.x) > 0.35;
+    const walking = !dancing && Math.abs(anchor - root.current.position.x) > 0.35;
 
-    if (!oneShot.current) {
+    if (!oneShot.current && !dancing) {
       setBase(walking && walkName ? walkName : settledIdle.current ?? idleNames[0]);
     }
 
     // A restrained phone-check break: play the rig's Interact clip and reveal a
     // phone attached to the animated wrist. Neutral idle remains the only loop.
-    if (!walking && !oneShot.current && now > nextIdleBreak.current) {
+    if (!dancing && !walking && !oneShot.current && now > nextIdleBreak.current) {
       if (nextIdleBreak.current !== 0) {
         phoneUntil.current = now + 1250;
         playReaction(/Interact/i);
@@ -321,11 +376,17 @@ function Character({ mood, workSide, dragYawRef, bodyXRef, focusRef, pointerRef 
       -0.62,
       0.62,
     );
-    const facing = walking ? Math.sign(travel) * 1.32 : attention + (dragYawRef.current ?? 0);
-    root.current.rotation.y = THREE.MathUtils.damp(root.current.rotation.y, facing, 3.4, delta);
+    const facing = dancing
+      ? root.current.rotation.y + delta * 2.4
+      : walking
+        ? Math.sign(travel) * 1.32
+        : attention + (dragYawRef.current ?? 0);
+    root.current.rotation.y = dancing
+      ? facing
+      : THREE.MathUtils.damp(root.current.rotation.y, facing, 3.4, delta);
     root.current.rotation.x = THREE.MathUtils.damp(
       root.current.rotation.x,
-      -aim.current.y * 0.05,
+      dancing ? Math.sin(now * 0.01) * 0.08 : -aim.current.y * 0.05,
       4,
       delta,
     );
@@ -603,9 +664,9 @@ const petLines = [
 ];
 
 const surpriseLines = [
-  'Curiosity rewarded.',
-  'You found the hidden layer.',
-  'Good interfaces reward exploration.',
+  'Five-second dance break.',
+  'You found the party button.',
+  'Curiosity unlocked — let’s move.',
 ];
 
 const focusLines = [
@@ -960,12 +1021,12 @@ export function ScrollWorld() {
             <div className="p-5">
               <p className="display-title text-xl text-white">You found the hidden layer.</p>
               <p className="mt-2 text-xs leading-relaxed text-white/50">
-                A good interface should reward curiosity. The character waves, the companion
-                celebrates, and the scene keeps one more shortcut for you.
+                Gift unlocked — the character dances for five seconds while the companion
+                celebrates. Press G anytime to replay the moment.
               </p>
               <div className="mt-4 flex items-center justify-between rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2.5">
                 <span className="text-[9px] uppercase tracking-[0.16em] text-white/40">
-                  Replay anytime
+                  Replay dance anytime
                 </span>
                 <kbd className="rounded-md border border-white/10 bg-black/30 px-2 py-1 text-[10px] text-cyan-200">
                   G
@@ -976,7 +1037,7 @@ export function ScrollWorld() {
                 onClick={() => emit({ kind: 'surprise' })}
                 className="mt-3 w-full rounded-xl border border-cyan-200/20 bg-cyan-200/[0.06] px-3 py-2.5 text-[9px] uppercase tracking-[0.16em] text-cyan-100 transition-colors hover:bg-cyan-200/[0.12]"
               >
-                Replay the moment
+                Dance again
               </button>
             </div>
           </div>
