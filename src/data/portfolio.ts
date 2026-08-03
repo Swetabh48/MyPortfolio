@@ -308,8 +308,55 @@ export const themes: Theme[] = [
   },
 ];
 
+export interface UpcomingProject {
+  title: string;
+  status: 'Building now' | 'In progress' | 'Next up' | 'Expanding';
+  blurb: string;
+  focus: string[];
+}
+
+/** Active and upcoming builds — not all public yet. */
+export const upcomingProjects: UpcomingProject[] = [
+  {
+    title: 'MatchCore',
+    status: 'Building now',
+    blurb:
+      'A low-latency limit order book matching engine in modern C++. Price-time priority matching, multi-client binary TCP ingestion, and a measured path toward durability and market data — systems work with numbers attached, not just slides.',
+    focus: ['C++', 'Networking', 'Order books', 'Systems'],
+  },
+  {
+    title: 'Chopus',
+    status: 'Building now',
+    blurb:
+      'An agent-style developer tool with streaming replies and tool calling. Bun monorepo spanning a CLI and server — still moving fast, aimed at feeling useful in a real terminal workflow rather than a demo chat box.',
+    focus: ['TypeScript', 'Agents', 'Tool calling', 'Bun'],
+  },
+  {
+    title: 'Attest',
+    status: 'In progress',
+    blurb:
+      'Grounded answers over SEC 10-K / 10-Q filings. Hybrid retrieval (vector + Postgres FTS), semantic caching, and evaluation so the model has to point at source sections instead of improvising.',
+    focus: ['RAG', 'Embeddings', 'Python', 'Eval'],
+  },
+  {
+    title: 'MailSender',
+    status: 'In progress',
+    blurb:
+      'A practical outreach workflow for job applications — templated referral emails, resume attach, and delivery tracking across desktop and a companion Android app. Less flashy than most portfolio pieces, more useful day to day.',
+    focus: ['APIs', 'Email', 'Automation', 'Capacitor'],
+  },
+  {
+    title: 'YouKnowBall',
+    status: 'Expanding',
+    blurb:
+      'Football match winner and scoreline prediction, built end-to-end for the FIFA World Cup with Elo, form, head-to-head, and Dixon–Coles / ML models. Next: extend the same pipeline to club football — Premier League, La Liga, and other top leagues.',
+    focus: ['Python', 'XGBoost', 'FastAPI', 'Sports data'],
+  },
+];
+
 export const navLinks = [
   { href: '#featured', label: 'Work' },
+  { href: '#building', label: 'Now' },
   { href: '#experience', label: 'Experience' },
   { href: '#about', label: 'About' },
   { href: '#skills', label: 'Skills' },

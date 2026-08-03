@@ -1,17 +1,41 @@
 import { Canvas, useFrame } from '@react-three/fiber';
-import { ContactShadows, Environment, useAnimations, useGLTF } from '@react-three/drei';
+import { useAnimations, useGLTF } from '@react-three/drei';
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { CSSProperties, RefObject } from 'react';
-import type { Bone, Group } from 'three';
+import type { Group } from 'three';
 import { Gift, X } from 'lucide-react';
 import * as THREE from 'three';
-import { SkeletonUtils } from 'three-stdlib';
 import { useReducedMotion } from '../hooks/useReducedMotion';
 
-const MODEL_URL = '/models/casual-character.glb';
+const MODEL_URL = '/models/casual-character.glb?v=visible1';
 useGLTF.preload(MODEL_URL);
 
-export type Mood = 'intro' | 'work' | 'experience' | 'about' | 'skills' | 'proof' | 'contact';
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    useGLTF.clear('/models/casual-character.glb');
+    useGLTF.clear(MODEL_URL);
+  });
+}
+
+/** Quaternius Casual2 — young character, recolored into a suit below. */
+const MODEL_SCALE = 0.92;
+
+/**
+ * Desk monitor sits on the character's left (−X). Negative yaw faces −X;
+ * the +0.55 bias turns him slightly toward the camera for a readable 3/4.
+ */
+const DESK_FACING = -Math.PI / 2 + 0.55;
+
+export type Mood =
+  | 'intro'
+  | 'work'
+  | 'building'
+  | 'experience'
+  | 'about'
+  | 'skills'
+  | 'proof'
+  | 'contact';
 
 const REACT_EVENT = 'portfolio:character-react';
 
@@ -23,15 +47,29 @@ type Reaction =
 
 /** Feet rest exactly here so the character never appears to float. */
 const GROUND_Y = -0.95;
+const DESK_X = 1.35;
+/** Where the character's root lands when seated; the workstation is built around it. */
+const SEAT_Z = 0.28;
+
+/**
+ * Where the wrists rest, as an offset from the seat: sideways from the spine, up from the
+ * floor, forward toward the monitor. The desk group shares the seat's origin and yaw, so
+ * these are directly comparable to the keyboard's own placement inside `CodingDesk`.
+ */
+const HAND_SPREAD = 0.12;
+const HAND_HEIGHT = 0.69;
+const HAND_FORWARD = 0.37;
 
 const moodAnchors: Record<Mood, number> = {
-  intro: 0.9,
+  intro: 1.35,
   work: 1.95,
+  building: DESK_X,
   experience: -1.05,
   about: 1.0,
   skills: -0.6,
   proof: 0.95,
-  contact: 0.1,
+  // Stay clear of the contact form on the right.
+  contact: -1.85,
 };
 
 /** Where the visitor's attention currently is, in normalised screen space. */
@@ -67,79 +105,266 @@ function emit(detail: Reaction) {
   window.dispatchEvent(new CustomEvent<Reaction>(REACT_EVENT, { detail }));
 }
 
-function SuitDetails() {
+/**
+ * Lapels / tie / buttons layered on the recolored navy torso. These are plain
+ * meshes rather than skinned geometry, so the caller shifts the group to follow
+ * the chest bone — otherwise they hang in the air whenever the character sits.
+ */
+function SuitDetails({ groupRef }: { groupRef: React.Ref<Group> }) {
   return (
-    <group>
-      {/* White shirt front layered over the recolored navy torso. */}
-      <mesh position={[0.012, 1.306, 0.205]} rotation={[0, 0, 0]}>
+    <group ref={groupRef}>
+      {/* Shirt placket */}
+      <mesh position={[0.012, 1.306, 0.205]}>
         <planeGeometry args={[0.145, 0.38]} />
-        <meshStandardMaterial color="#f4f7fb" roughness={0.7} />
+        <meshBasicMaterial color="#f4f7fb" toneMapped={false} />
       </mesh>
-      {/* Tailored lapels. */}
+      {/* Lapels */}
       <mesh position={[-0.075, 1.355, 0.218]} rotation={[0, 0, -0.48]}>
         <boxGeometry args={[0.07, 0.31, 0.018]} />
-        <meshStandardMaterial color="#101827" roughness={0.62} />
+        <meshBasicMaterial color="#4b648f" toneMapped={false} />
       </mesh>
       <mesh position={[0.098, 1.355, 0.218]} rotation={[0, 0, 0.48]}>
         <boxGeometry args={[0.07, 0.31, 0.018]} />
-        <meshStandardMaterial color="#101827" roughness={0.62} />
+        <meshBasicMaterial color="#4b648f" toneMapped={false} />
       </mesh>
-      {/* Tie and knot. */}
+      {/* Tie */}
       <mesh position={[0.012, 1.315, 0.232]}>
         <boxGeometry args={[0.035, 0.255, 0.018]} />
-        <meshStandardMaterial color="#162f57" roughness={0.5} />
+        <meshBasicMaterial color="#1e3f6e" toneMapped={false} />
       </mesh>
       <mesh position={[0.012, 1.455, 0.234]} rotation={[0, 0, Math.PI / 4]}>
         <boxGeometry args={[0.045, 0.045, 0.02]} />
-        <meshStandardMaterial color="#1d4a80" roughness={0.48} />
+        <meshBasicMaterial color="#2a5f9e" toneMapped={false} />
       </mesh>
-      {/* Jacket buttons. */}
       {[1.23, 1.15].map((y) => (
         <mesh key={y} position={[0.012, y, 0.232]} rotation={[Math.PI / 2, 0, 0]}>
           <cylinderGeometry args={[0.012, 0.012, 0.008, 16]} />
-          <meshStandardMaterial color="#8aa5c5" metalness={0.5} roughness={0.35} />
+          <meshBasicMaterial color="#9bb6d4" toneMapped={false} />
         </mesh>
       ))}
     </group>
   );
 }
 
-function Character({ mood, workSide, dragYawRef, bodyXRef, focusRef, pointerRef }: SceneInput) {
+/**
+ * Quirk of this rig: FootL/FootR/PTL/PTR hang off `Root`, not off the shins, so
+ * bending the legs alone leaves the feet planted and stretches the calves. Any
+ * sit pose has to translate the feet itself, which is why rest offsets are kept.
+ */
+type SitLeg = {
+  hip: THREE.Bone;
+  knee: THREE.Bone;
+  /** Foot plus its toe bone; both hang off Root and must be carried by hand. */
+  ankle: THREE.Bone;
+  toe: THREE.Bone | null;
+};
+
+/**
+ * Segment lengths are rotation-invariant, so they can be sampled from any pose and
+ * then used as hard constraints: aiming each bone instead of guessing Euler angles is
+ * what keeps the limbs from stretching. Lengths are stored unscaled (root-local), and
+ * the thigh doubles as the exact pelvis drop for a horizontal thigh. Ankle/toe rest
+ * offsets stay in their own parent space.
+ */
+type SitRest = {
+  thigh: number;
+  shin: number;
+  ankle: THREE.Vector3;
+  toe: THREE.Vector3 | null;
+  hipQuat: THREE.Quaternion;
+  kneeQuat: THREE.Quaternion;
+};
+
+/**
+ * Unlike the legs, the arms are a conventional chain (Chest → Shoulder → UpperArm →
+ * LowerArm → Wrist), so aiming the two arm bones carries the hand and fingers along.
+ */
+type SitArm = {
+  shoulder: THREE.Bone;
+  upper: THREE.Bone;
+  fore: THREE.Bone;
+};
+
+type ArmRest = {
+  upper: number;
+  fore: number;
+  upperQuat: THREE.Quaternion;
+  foreQuat: THREE.Quaternion;
+};
+
+type SitBones = {
+  /** `Body` is the legs' parent here; `Hips` is their sibling, so the drop goes on Body. */
+  pelvis: THREE.Bone | null;
+  lean: THREE.Bone | null;
+  legs: SitLeg[];
+  arms: SitArm[];
+  pelvisRest: THREE.Vector3 | null;
+};
+
+const scratchA = new THREE.Vector3();
+const scratchC = new THREE.Vector3();
+const scratchD = new THREE.Vector3();
+/* Reserved for the sit solver so it never aliases the vectors aimBoneY uses. */
+const solveTarget = new THREE.Vector3();
+const solveAxis = new THREE.Vector3();
+const solveRest = new THREE.Vector3();
+const solveDelta = new THREE.Vector3();
+const solvePoint = new THREE.Vector3();
+const armShoulder = new THREE.Vector3();
+const armHand = new THREE.Vector3();
+const armElbow = new THREE.Vector3();
+const armHint = new THREE.Vector3();
+const armAxis = new THREE.Vector3();
+const quatA = new THREE.Quaternion();
+const quatB = new THREE.Quaternion();
+const quatC = new THREE.Quaternion();
+const quatD = new THREE.Quaternion();
+const quatE = new THREE.Quaternion();
+
+type RestPose = Map<string, { pos: THREE.Vector3; quat: THREE.Quaternion }>;
+const authoredPoses = new WeakMap<THREE.Object3D, RestPose>();
+
+/**
+ * The bone transforms as the GLTF authored them, captured the first time a scene is seen.
+ *
+ * Neither obvious alternative works as a reference frame: after a hot reload the live
+ * bones hold whatever pose was on screen, and the skeleton's own bind pose is a T-pose
+ * that none of this model's clips animate away — applying it would leave the arms stuck
+ * out sideways.
+ */
+function authoredPose(scene: THREE.Object3D): RestPose {
+  let pose = authoredPoses.get(scene);
+  if (!pose) {
+    pose = new Map();
+    scene.traverse((node) => {
+      if ((node as THREE.Bone).isBone) {
+        pose?.set(node.name, {
+          pos: node.position.clone(),
+          quat: node.quaternion.clone(),
+        });
+      }
+    });
+    authoredPoses.set(scene, pose);
+  }
+  return pose;
+}
+
+/**
+ * Rotates `bone` so its local +Y (the axis its child sits on in this rig) points at
+ * `target`, blending `amount` of the way there from `base`.
+ *
+ * Blending from an explicit rest pose rather than the bone's live rotation matters: the
+ * idle clip has no tracks for the leg bones, so a live baseline would compound frame to
+ * frame and never unwind when the character stands back up.
+ */
+function aimBoneY(
+  bone: THREE.Bone,
+  target: THREE.Vector3,
+  amount: number,
+  base: THREE.Quaternion,
+) {
+  const parent = bone.parent;
+  if (!parent) return;
+  quatD.copy(base);
+  bone.quaternion.copy(base);
+  bone.updateWorldMatrix(true, false);
+  bone.getWorldQuaternion(quatA);
+  scratchC.set(0, 1, 0).applyQuaternion(quatA).normalize();
+  scratchD.copy(target).sub(scratchA.setFromMatrixPosition(bone.matrixWorld));
+  if (scratchD.lengthSq() < 1e-8) return;
+  scratchD.normalize();
+  quatB.setFromUnitVectors(scratchC, scratchD).multiply(quatA);
+  parent.getWorldQuaternion(quatC);
+  /* Held in its own quaternion: blending straight into bone.quaternion would alias the
+     slerp's own source and silently discard the result. */
+  quatE.copy(quatC.invert().multiply(quatB)).normalize();
+  bone.quaternion.copy(quatD).slerp(quatE, amount);
+}
+
+/**
+ * Writes into `out` where the elbow (or knee) has to sit for a two-bone chain to reach
+ * `end` from `start` without changing either segment's length.
+ *
+ * The law of cosines fixes how far the joint sits off the straight line between the two,
+ * which still leaves a whole circle of valid positions; `hint` picks which way the joint
+ * breaks out of it. Reach is clamped so an out-of-range target straightens the chain
+ * instead of producing a NaN from acos.
+ */
+function solveJoint(
+  start: THREE.Vector3,
+  end: THREE.Vector3,
+  first: number,
+  second: number,
+  hint: THREE.Vector3,
+  out: THREE.Vector3,
+) {
+  out.copy(end).sub(start);
+  const reach = THREE.MathUtils.clamp(
+    out.length(),
+    Math.abs(first - second) + 1e-4,
+    first + second - 1e-4,
+  );
+  if (reach < 1e-5) return out.copy(start);
+  out.normalize();
+  armAxis.copy(out).cross(hint);
+  if (armAxis.lengthSq() < 1e-8) return out.multiplyScalar(first).add(start);
+  armAxis.normalize();
+  const cos = THREE.MathUtils.clamp(
+    (first * first + reach * reach - second * second) / (2 * first * reach),
+    -1,
+    1,
+  );
+  return out
+    .applyAxisAngle(armAxis, Math.acos(cos))
+    .multiplyScalar(first)
+    .add(start);
+}
+
+function Character({
+  mood,
+  workSide,
+  dragYawRef,
+  bodyXRef,
+  pointerRef,
+}: SceneInput) {
   const root = useRef<Group>(null);
   const { scene, animations } = useGLTF(MODEL_URL);
-  const model = useMemo(() => SkeletonUtils.clone(scene), [scene]);
   const { actions, names } = useAnimations(animations, root);
-
-  const cursor = useRef(new THREE.Vector2());
   const baseClip = useRef<string | null>(null);
-  const oneShot = useRef<{ action: THREE.AnimationAction } | null>(null);
-  const aim = useRef(new THREE.Vector2());
-  const nextIdleBreak = useRef(0);
-  const settledIdle = useRef<string | null>(null);
-  const phoneRef = useRef<THREE.Mesh | null>(null);
-  const phoneUntil = useRef(0);
+  const oneShot = useRef<THREE.AnimationAction | null>(null);
   const danceUntil = useRef(0);
   const danceStep = useRef(0);
-  const leftArmRef = useRef<Bone | null>(null);
-  const rightArmRef = useRef<Bone | null>(null);
-  const pointTarget = useRef(new THREE.Vector3());
-  const pointDirection = useRef(new THREE.Vector3());
-  const parentQuaternion = useRef(new THREE.Quaternion());
-  const pointQuaternion = useRef(new THREE.Quaternion());
-  const boneAxis = useRef(new THREE.Vector3(0, 1, 0));
+  const sitBlend = useRef(0);
+  const suitRef = useRef<Group>(null);
+  const chestBone = useRef<THREE.Bone | null>(null);
+  const chestRest = useRef<THREE.Vector3 | null>(null);
+  const sitBones = useRef<SitBones>({
+    pelvis: null,
+    lean: null,
+    legs: [],
+    arms: [],
+    pelvisRest: null,
+  });
+  const sitRest = useRef<SitRest[] | null>(null);
+  const armRest = useRef<ArmRest[] | null>(null);
+  const sitApplied = useRef(false);
 
   const clipName = useCallback(
     (matcher: RegExp) => names.find((name) => matcher.test(name)),
     [names],
   );
 
-  const idleNames = useMemo(() => {
-    const pool = [clipName(/Idle_Neutral/i)].filter(
-      (name): name is string => Boolean(name),
-    );
-    return pool.length > 0 ? pool : [names[0]];
-  }, [clipName, names]);
-  const walkName = useMemo(() => clipName(/Walk/i), [clipName]);
+  const idleName = useMemo(
+    () =>
+      clipName(/Idle_Neutral/i) ??
+      names.find((n) => /\|Idle$/i.test(n) || n === 'Idle') ??
+      names[0],
+    [clipName, names],
+  );
+  const walkName = useMemo(
+    () => names.find((n) => /\|Walk$/i.test(n) || n === 'Walk'),
+    [names],
+  );
   const danceClips = useMemo(
     () =>
       [
@@ -153,117 +378,152 @@ function Character({ mood, workSide, dragYawRef, bodyXRef, focusRef, pointerRef 
     [clipName],
   );
 
-  /** The head bone is driven on top of the clip so he can watch the visitor. */
-  const headBoneRef = useRef<Bone | null>(null);
-  const headRestRef = useRef<THREE.Euler | null>(null);
-
   useEffect(() => {
-    let found: Bone | null = null;
-    model.traverse((node) => {
-      if (found || !(node as Bone).isBone) return;
-      if (/head/i.test(node.name) && !/end|top|nub/i.test(node.name)) found = node as Bone;
+    const bone = (name: string) =>
+      (scene.getObjectByName(name) as THREE.Bone | undefined) ?? null;
+
+    /* Put the rig back into its authored pose so every "rest" value below shares one
+       reference frame. Sampling the live pose instead would make that frame depend on
+       where the page happened to be — a hot reload or a deep link into the desk section
+       would capture the seated pose as rest and leave the character permanently sunk. */
+    const pose = authoredPose(scene);
+    scene.traverse((node) => {
+      const rest = (node as THREE.Bone).isBone ? pose.get(node.name) : undefined;
+      if (rest) {
+        node.position.copy(rest.pos);
+        node.quaternion.copy(rest.quat);
+      }
     });
-    headBoneRef.current = found;
-    leftArmRef.current = model.getObjectByName('UpperArmL') as Bone | null;
-    rightArmRef.current = model.getObjectByName('UpperArmR') as Bone | null;
-    // Captured before the mixer runs, since idle clips carry no head track and a
-    // relative offset would compound every frame.
-    headRestRef.current = found ? (found as Bone).rotation.clone() : null;
-  }, [model]);
 
-  useEffect(() => {
-    model.traverse((node) => {
+    const pelvis = bone('Body');
+    sitBones.current = {
+      pelvis,
+      // This rig has no Spine bone; Abdomen is the equivalent lean joint.
+      lean: bone('Abdomen') ?? bone('Torso'),
+      legs: (
+        [
+          ['UpperLegL', 'LowerLegL', 'FootL', 'PTL'],
+          ['UpperLegR', 'LowerLegR', 'FootR', 'PTR'],
+        ] as const
+      )
+        .map(([hip, knee, ankle, toe]) => ({
+          hip: bone(hip),
+          knee: bone(knee),
+          ankle: bone(ankle),
+          toe: bone(toe),
+        }))
+        .filter((leg): leg is SitLeg => Boolean(leg.hip && leg.knee && leg.ankle)),
+      arms: (
+        [
+          ['ShoulderL', 'UpperArmL', 'LowerArmL'],
+          ['ShoulderR', 'UpperArmR', 'LowerArmR'],
+        ] as const
+      )
+        .map(([shoulder, upper, fore]) => ({
+          shoulder: bone(shoulder),
+          upper: bone(upper),
+          fore: bone(fore),
+        }))
+        .filter((arm): arm is SitArm =>
+          Boolean(arm.shoulder && arm.upper && arm.fore),
+        ),
+      pelvisRest: pelvis ? pelvis.position.clone() : null,
+    };
+    const chest = bone('Chest');
+    chestBone.current = chest;
+    chestRest.current = null;
+
+    const legs = sitBones.current.legs;
+    if (root.current) {
+      root.current.updateMatrixWorld(true);
+      const at = (b: THREE.Object3D) =>
+        new THREE.Vector3().setFromMatrixPosition(b.matrixWorld);
+      const scale = root.current.scale.y;
+      sitRest.current = legs.map((leg) => ({
+        thigh: at(leg.knee).distanceTo(at(leg.hip)) / scale,
+        shin: at(leg.ankle).distanceTo(at(leg.knee)) / scale,
+        ankle: leg.ankle.position.clone(),
+        toe: leg.toe ? leg.toe.position.clone() : null,
+        hipQuat: leg.hip.quaternion.clone(),
+        kneeQuat: leg.knee.quaternion.clone(),
+      }));
+      armRest.current = sitBones.current.arms.map((arm) => {
+        const wrist = arm.fore.children.find(
+          (child) => (child as THREE.Bone).isBone,
+        );
+        return {
+          upper: at(arm.fore).distanceTo(at(arm.upper)) / scale,
+          fore: wrist ? at(wrist).distanceTo(at(arm.fore)) / scale : 0,
+          upperQuat: arm.upper.quaternion.clone(),
+          foreQuat: arm.fore.quaternion.clone(),
+        };
+      });
+      if (chest) {
+        chest.updateWorldMatrix(true, false);
+        chestRest.current = root.current.worldToLocal(at(chest));
+      }
+    }
+
+    // Mutate in place — never dispose GLTF materials (HMR + dispose blanks WebGL).
+    scene.traverse((node) => {
       if (!(node as THREE.Mesh).isMesh) return;
       const mesh = node as THREE.Mesh;
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
+      mesh.frustumCulled = false;
+      mesh.castShadow = false;
+      mesh.receiveShadow = false;
       const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-      const styledMaterials = materials.map((source) => {
-        const material = source.clone() as THREE.MeshStandardMaterial;
+      materials.forEach((source) => {
+        const material = source as THREE.MeshStandardMaterial;
+        if (!material?.color) return;
+        material.metalness = 0;
+        material.roughness = 0.55;
+        material.envMapIntensity = 0;
+        material.toneMapped = false;
         if (/Casual2_Body_1/i.test(mesh.name)) {
-          material.color.set('#101827');
-          material.roughness = 0.62;
+          material.color.set('#5a74a0');
+          material.emissive.set('#1a2a44');
+          material.emissiveIntensity = 0.45;
+        } else if (/Casual2_Legs/i.test(mesh.name)) {
+          material.color.set('#334560');
+          material.emissive.set('#0c1420');
+          material.emissiveIntensity = 0.25;
+        } else if (/Casual2_Feet/i.test(mesh.name)) {
+          material.color.set('#1a2230');
+        } else if (/Casual2_Head_5/i.test(mesh.name)) {
+          material.color.set('#6a3e20');
+          material.emissive.set('#2a1808');
+          material.emissiveIntensity = 0.2;
+        } else if (/Casual2_Head_1|Casual2_Body_2/i.test(mesh.name)) {
+          material.color.set('#e0c09a');
+          material.emissive.set('#4a3020');
+          material.emissiveIntensity = 0.35;
+        } else if (/Casual2_Head_2/i.test(mesh.name)) {
+          material.color.set('#c9a888');
+          material.emissive.set('#3a2818');
+          material.emissiveIntensity = 0.25;
         }
-        if (/Casual2_Legs/i.test(mesh.name)) {
-          material.color.set('#171d27');
-          material.roughness = 0.72;
-        }
-        if (/Casual2_Feet/i.test(mesh.name)) {
-          material.color.set('#090d14');
-          material.roughness = 0.4;
-        }
-        return material;
+        material.needsUpdate = true;
       });
-      mesh.material = styledMaterials.length === 1 ? styledMaterials[0] : styledMaterials;
     });
+  }, [scene]);
 
-    const wrist = model.getObjectByName('WristR');
-    if (!wrist) return;
-    const geometry = new THREE.BoxGeometry(0.00062, 0.00108, 0.00012);
-    const material = new THREE.MeshStandardMaterial({
-      color: '#05070b',
-      metalness: 0.65,
-      roughness: 0.24,
-      emissive: '#38bdf8',
-      emissiveIntensity: 0.08,
-    });
-    const phone = new THREE.Mesh(geometry, material);
-    phone.position.set(0.00042, 0.00072, 0.00036);
-    phone.rotation.set(0.25, 0.15, -0.12);
-    phone.visible = false;
-    wrist.add(phone);
-    phoneRef.current = phone;
-
-    return () => {
-      wrist.remove(phone);
-      geometry.dispose();
-      material.dispose();
-      phoneRef.current = null;
-    };
-  }, [model]);
-
-  /** Looping base pose: idle when settled, walk while travelling between chapters. */
   const setBase = useCallback(
     (name: string | undefined) => {
       if (!name || !actions[name] || baseClip.current === name) return;
-
       const next = actions[name];
       const previous = baseClip.current ? actions[baseClip.current] : undefined;
-
       next.reset();
       next.setLoop(THREE.LoopRepeat, Infinity);
-      next.fadeIn(0.4).play();
-      previous?.fadeOut(0.4);
+      next.fadeIn(0.35).play();
+      previous?.fadeOut(0.35);
       baseClip.current = name;
     },
     [actions],
   );
 
   useEffect(() => {
-    settledIdle.current = idleNames[0];
-    setBase(idleNames[0]);
-  }, [idleNames, setBase]);
-
-  /** One-shot gesture that always hands control back to the looping base. */
-  const playReaction = useCallback(
-    (matcher: RegExp, options?: { force?: boolean; timeScale?: number }) => {
-      const name = clipName(matcher);
-      const action = name ? actions[name] : undefined;
-      if (!name || !action) return;
-      if (oneShot.current && !options?.force) return;
-
-      if (oneShot.current) oneShot.current.action.fadeOut(0.12);
-
-      action.reset();
-      action.setLoop(THREE.LoopOnce, 1);
-      action.setEffectiveTimeScale(options?.timeScale ?? 1);
-      action.fadeIn(0.14).play();
-
-      if (baseClip.current) actions[baseClip.current]?.fadeOut(0.14);
-      oneShot.current = { action };
-    },
-    [actions, clipName],
-  );
+    setBase(idleName);
+  }, [idleName, setBase]);
 
   const playDanceStep = useCallback(() => {
     if (danceClips.length === 0) return;
@@ -271,13 +531,14 @@ function Character({ mood, workSide, dragYawRef, bodyXRef, focusRef, pointerRef 
     const action = actions[name];
     if (!action) return;
 
-    if (oneShot.current) oneShot.current.action.fadeOut(0.1);
+    oneShot.current?.fadeOut(0.1);
     action.reset();
     action.setLoop(THREE.LoopOnce, 1);
+    action.clampWhenFinished = true;
     action.setEffectiveTimeScale(1.15);
     action.fadeIn(0.1).play();
     if (baseClip.current) actions[baseClip.current]?.fadeOut(0.1);
-    oneShot.current = { action };
+    oneShot.current = action;
     danceStep.current += 1;
   }, [actions, danceClips]);
 
@@ -285,7 +546,6 @@ function Character({ mood, workSide, dragYawRef, bodyXRef, focusRef, pointerRef 
     (durationMs = 5000) => {
       danceUntil.current = performance.now() + durationMs;
       danceStep.current = 0;
-      nextIdleBreak.current = performance.now() + durationMs + 8000;
       playDanceStep();
     },
     [playDanceStep],
@@ -294,139 +554,246 @@ function Character({ mood, workSide, dragYawRef, bodyXRef, focusRef, pointerRef 
   useEffect(() => {
     const onReact = (event: Event) => {
       const detail = (event as CustomEvent<Reaction>).detail;
-      if (detail.kind === 'surprise') {
-        startDance(5000);
-        return;
-      }
-      if (detail.kind === 'greet') playReaction(/Wave/i);
-      if (detail.kind === 'focus') playReaction(/Interact/i);
-      nextIdleBreak.current = performance.now() + 9000;
+      if (detail.kind === 'surprise') startDance(5000);
     };
     window.addEventListener(REACT_EVENT, onReact);
     return () => window.removeEventListener(REACT_EVENT, onReact);
-  }, [playReaction, startDance]);
+  }, [startDance]);
 
-  useFrame((state, delta) => {
+  /* Must stay at priority 0: any positive priority puts R3F into manual-render mode
+     and the canvas stops painting. useAnimations subscribes above, so the mixer still
+     runs before this callback and the bone sit overrides the idle clip. */
+  useFrame((_, delta) => {
     if (!root.current) return;
     const now = performance.now();
-    const pointer = pointerRef.current;
     const dancing = now < danceUntil.current;
-    const checkingPhone = !dancing && now < phoneUntil.current;
-    if (phoneRef.current) phoneRef.current.visible = checkingPhone;
+    const atDesk = mood === 'building' && !dancing;
 
-    // Retire a finished gesture instead of freezing on its last frame.
-    const active = oneShot.current;
-    if (active) {
-      const clip = active.action.getClip();
-      if (!active.action.isRunning() || active.action.time >= clip.duration - 0.06) {
-        active.action.fadeOut(0.16);
+    // Snap out of the sit pose quickly so the hero never looks half-seated.
+    sitBlend.current = THREE.MathUtils.damp(
+      sitBlend.current,
+      atDesk ? 1 : 0,
+      atDesk ? 4.2 : 12,
+      delta,
+    );
+    if (!atDesk && sitBlend.current < 0.04) sitBlend.current = 0;
+    const sit = sitBlend.current;
+
+    if (dancing && oneShot.current) {
+      const clip = oneShot.current.getClip();
+      if (
+        !oneShot.current.isRunning() ||
+        oneShot.current.time >= clip.duration - 0.06
+      ) {
+        oneShot.current.fadeOut(0.08);
         oneShot.current = null;
-        if (dancing) {
-          playDanceStep();
-        } else {
-          const base = baseClip.current ? actions[baseClip.current] : undefined;
-          base?.reset().fadeIn(0.26).play();
-        }
+        playDanceStep();
+      }
+    } else if (!dancing && oneShot.current) {
+      const clip = oneShot.current.getClip();
+      if (
+        !oneShot.current.isRunning() ||
+        oneShot.current.time >= clip.duration - 0.06
+      ) {
+        oneShot.current.fadeOut(0.2);
+        oneShot.current = null;
+        if (baseClip.current) actions[baseClip.current]?.reset().fadeIn(0.25).play();
       }
     }
-
-    cursor.current.x = THREE.MathUtils.lerp(cursor.current.x, pointer.x, 0.06);
-    cursor.current.y = THREE.MathUtils.lerp(cursor.current.y, pointer.y, 0.06);
-
-    const focus = focusRef.current;
-    const focused = Boolean(focus) && now < focus.until && !dancing;
 
     const anchor = anchorFor(mood, workSide);
-    const targetX = anchor + cursor.current.x * 0.16;
+    const sway = atDesk || dancing ? 0 : pointerRef.current.x * 0.16;
     const previousX = root.current.position.x;
-    root.current.position.x = THREE.MathUtils.damp(previousX, targetX, 2.4, delta);
-    // Light hop while celebrating so the chained kicks/waves read as a dance.
-    root.current.position.y = dancing
-      ? GROUND_Y + Math.abs(Math.sin(now * 0.014)) * 0.09
-      : GROUND_Y;
+    root.current.position.x = THREE.MathUtils.damp(
+      previousX,
+      anchor + sway,
+      atDesk ? 3.8 : 2.4,
+      delta,
+    );
+    root.current.position.z = THREE.MathUtils.damp(
+      root.current.position.z,
+      atDesk ? SEAT_Z : 0,
+      3.4,
+      delta,
+    );
+    // Feet are planted by the rig, so seating lowers the hips rather than the root.
+    root.current.position.y =
+      GROUND_Y + (dancing ? Math.abs(Math.sin(now * 0.012)) * 0.06 : 0);
     bodyXRef.current = root.current.position.x;
 
-    const travel = (root.current.position.x - previousX) / Math.max(delta, 0.0001);
-    // Measured against the anchor, so cursor sway never reads as travelling.
-    const walking = !dancing && Math.abs(anchor - root.current.position.x) > 0.35;
-
-    if (!oneShot.current && !dancing) {
-      setBase(walking && walkName ? walkName : settledIdle.current ?? idleNames[0]);
+    const walking =
+      !atDesk && !dancing && Math.abs(anchor - root.current.position.x) > 0.35;
+    if (!dancing && !oneShot.current) {
+      setBase(walking && walkName ? walkName : idleName);
     }
 
-    // A restrained phone-check break: play the rig's Interact clip and reveal a
-    // phone attached to the animated wrist. Neutral idle remains the only loop.
-    if (!dancing && !walking && !oneShot.current && now > nextIdleBreak.current) {
-      if (nextIdleBreak.current !== 0) {
-        phoneUntil.current = now + 1250;
-        playReaction(/Interact/i);
+    const b = sitBones.current;
+
+    // Bone sit after the mixer: set full XYZ so idle twist doesn't corkscrew the legs.
+    const rest = sitRest.current;
+    if (sit > 0.02 && rest) {
+      const mix = (bone: THREE.Bone | null, x: number, y: number, z: number) => {
+        if (!bone) return;
+        if (!Number.isFinite(bone.rotation.x)) bone.rotation.x = 0;
+        if (!Number.isFinite(bone.rotation.y)) bone.rotation.y = 0;
+        if (!Number.isFinite(bone.rotation.z)) bone.rotation.z = 0;
+        bone.rotation.x = THREE.MathUtils.lerp(bone.rotation.x, x, sit);
+        bone.rotation.y = THREE.MathUtils.lerp(bone.rotation.y, y, sit);
+        bone.rotation.z = THREE.MathUtils.lerp(bone.rotation.z, z, sit);
+      };
+      mix(b.lean, 0.16, 0, 0);
+
+      if (b.pelvis && b.pelvisRest) {
+        const p = b.pelvis.parent;
+        if (p) {
+          scratchA.copy(b.pelvisRest);
+          p.localToWorld(scratchA);
+          scratchA.y -= rest[0].thigh * sit * root.current.scale.y;
+          b.pelvis.position.copy(p.worldToLocal(scratchA));
+        }
       }
-      nextIdleBreak.current = now + 11000 + Math.random() * 5000;
+      root.current.updateMatrixWorld(true);
+
+      /* Each leg is solved rather than posed: thigh aimed straight forward from the
+         hip, shin aimed straight down, ankle dropped exactly one shin below the knee.
+         Because the pelvis fell by one thigh length, that lands both feet back on the
+         floor at their true segment lengths, identically on each side. */
+      const scale = root.current.scale.y;
+      const yaw = root.current.rotation.y;
+      const forwardX = Math.sin(yaw);
+      const forwardZ = Math.cos(yaw);
+
+      b.legs.forEach((leg, i) => {
+        const r = rest[i];
+        leg.hip.updateWorldMatrix(true, false);
+        solveTarget
+          .setFromMatrixPosition(leg.hip.matrixWorld)
+          .addScaledVector(solveAxis.set(forwardX, 0, forwardZ), r.thigh * scale);
+        aimBoneY(leg.hip, solveTarget, sit, r.hipQuat);
+
+        leg.knee.updateWorldMatrix(true, false);
+        solveTarget
+          .setFromMatrixPosition(leg.knee.matrixWorld)
+          .addScaledVector(solveAxis.set(0, -1, 0), r.shin * scale);
+        aimBoneY(leg.knee, solveTarget, sit, r.kneeQuat);
+
+        // Ankle and toe share one offset, so the shoe travels rigidly instead of shearing.
+        const parent = leg.ankle.parent;
+        if (!parent) return;
+        parent.updateWorldMatrix(true, false);
+        solveRest.copy(r.ankle);
+        parent.localToWorld(solveRest);
+        solveDelta.copy(solveTarget).sub(solveRest).multiplyScalar(sit);
+
+        const place = (target: THREE.Bone, restLocal: THREE.Vector3) => {
+          const p = target.parent;
+          if (!p) return;
+          p.updateWorldMatrix(true, false);
+          solvePoint.copy(restLocal);
+          p.localToWorld(solvePoint).add(solveDelta);
+          target.position.copy(p.worldToLocal(solvePoint));
+        };
+        place(leg.ankle, r.ankle);
+        if (leg.toe && r.toe) place(leg.toe, r.toe);
+      });
+
+      /* Hands onto the keyboard. Targets are built from the seat rather than from the desk
+         object so this stays correct while the desk plays its entrance scale-up. */
+      const arms = armRest.current;
+      if (arms && arms.length === b.arms.length) {
+        solvePoint.setFromMatrixPosition(root.current.matrixWorld);
+        const rightX = Math.cos(yaw);
+        const rightZ = -Math.sin(yaw);
+        b.arms.forEach((arm, i) => {
+          const ar = arms[i];
+          if (ar.fore <= 0) return;
+          arm.upper.updateWorldMatrix(true, false);
+          armShoulder.setFromMatrixPosition(arm.upper.matrixWorld);
+
+          // Which way this arm flares, read off the rig rather than assumed from L/R.
+          const side =
+            Math.sign(
+              (armShoulder.x - solvePoint.x) * rightX +
+                (armShoulder.z - solvePoint.z) * rightZ,
+            ) || 1;
+          const offset = HAND_SPREAD * side;
+          armHand.set(
+            solvePoint.x + offset * rightX + HAND_FORWARD * forwardX,
+            solvePoint.y + HAND_HEIGHT,
+            solvePoint.z + offset * rightZ + HAND_FORWARD * forwardZ,
+          );
+
+          // Elbows break outward and down, the way they do over a keyboard.
+          armHint.set(rightX * side * 0.8 - forwardX * 0.3, -1, rightZ * side * 0.8 - forwardZ * 0.3);
+          solveJoint(
+            armShoulder,
+            armHand,
+            ar.upper * scale,
+            ar.fore * scale,
+            armHint,
+            armElbow,
+          );
+          aimBoneY(arm.upper, armElbow, sit, ar.upperQuat);
+          aimBoneY(arm.fore, armHand, sit, ar.foreQuat);
+        });
+      }
+      sitApplied.current = true;
+    } else if (rest && sitApplied.current) {
+      /* Released once on exit, not every frame: the walk and dance clips animate these
+         same foot bones, and re-pinning them each frame would freeze the footwork. */
+      if (b.pelvis && b.pelvisRest) b.pelvis.position.copy(b.pelvisRest);
+      b.legs.forEach((leg, i) => {
+        leg.ankle.position.copy(rest[i].ankle);
+        if (leg.toe && rest[i].toe) leg.toe.position.copy(rest[i].toe!);
+        leg.hip.quaternion.copy(rest[i].hipQuat);
+        leg.knee.quaternion.copy(rest[i].kneeQuat);
+      });
+      const arms = armRest.current;
+      if (arms) {
+        b.arms.forEach((arm, i) => {
+          if (!arms[i]) return;
+          arm.upper.quaternion.copy(arms[i].upperQuat);
+          arm.fore.quaternion.copy(arms[i].foreQuat);
+        });
+      }
+      sitApplied.current = false;
     }
 
-    // Aim at the hovered card when there is one, otherwise at the pointer.
-    const aimX = focused ? focus.x : cursor.current.x;
-    const aimY = focused ? focus.y : cursor.current.y;
-    aim.current.x = THREE.MathUtils.damp(aim.current.x, aimX, 4, delta);
-    aim.current.y = THREE.MathUtils.damp(aim.current.y, aimY, 4, delta);
-
-    // Clamped so he angles toward the visitor without ever turning his back.
-    const attention = THREE.MathUtils.clamp(
-      -0.2 + aim.current.x * (focused ? 0.7 : 0.42),
-      -0.62,
-      0.62,
-    );
     const facing = dancing
-      ? root.current.rotation.y + delta * 2.4
-      : walking
-        ? Math.sign(travel) * 1.32
-        : attention + (dragYawRef.current ?? 0);
+      ? root.current.rotation.y + delta * 2.2
+      : atDesk
+        ? DESK_FACING
+        : walking
+          ? Math.sign(root.current.position.x - previousX || 1) * 1.32
+          : THREE.MathUtils.clamp(0.08 + pointerRef.current.x * 0.38, -0.45, 0.55) +
+            (dragYawRef.current ?? 0);
     root.current.rotation.y = dancing
       ? facing
-      : THREE.MathUtils.damp(root.current.rotation.y, facing, 3.4, delta);
+      : THREE.MathUtils.damp(root.current.rotation.y, facing, atDesk ? 5.2 : 3.4, delta);
     root.current.rotation.x = THREE.MathUtils.damp(
       root.current.rotation.x,
-      dancing ? Math.sin(now * 0.01) * 0.08 : -aim.current.y * 0.05,
-      4,
+      dancing ? Math.sin(now * 0.01) * 0.06 : 0,
+      5.5,
       delta,
     );
 
-    // Written after the mixer has posed the skeleton for this frame.
-    const head = headBoneRef.current;
-    const rest = headRestRef.current;
-    if (head && rest && !walking && (!oneShot.current || checkingPhone)) {
-      head.rotation.set(
-        rest.x + (checkingPhone ? 0.24 : THREE.MathUtils.clamp(aim.current.y * 0.2, -0.2, 0.2)),
-        rest.y + THREE.MathUtils.clamp(aim.current.x * 0.38, -0.38, 0.38),
-        rest.z,
-      );
-    }
+    const baseScale =
+      (mood === 'work' ? 0.92 : mood === 'building' ? 0.96 : 1) * MODEL_SCALE;
+    root.current.scale.setScalar(baseScale);
 
-    // Point toward the hovered project with the arm nearest that side.
-    // The model's arm bones extend along local +Y, so align that axis with
-    // the hovered card's world-space direction after the mixer poses the rig.
-    if (focused && !walking && !oneShot.current) {
-      const arm = focus.x < 0 ? leftArmRef.current : rightArmRef.current;
-      if (arm?.parent) {
-        pointTarget.current.set(focus.x, focus.y, 0.25).unproject(state.camera);
-        arm.getWorldPosition(pointDirection.current);
-        pointDirection.current.subVectors(pointTarget.current, pointDirection.current).normalize();
-        arm.parent.getWorldQuaternion(parentQuaternion.current).invert();
-        pointDirection.current.applyQuaternion(parentQuaternion.current).normalize();
-        pointQuaternion.current.setFromUnitVectors(boneAxis.current, pointDirection.current);
-        arm.quaternion.slerp(pointQuaternion.current, 0.12);
-      }
+    // Carry the unskinned suit pieces along with the torso.
+    if (chestBone.current && suitRef.current && chestRest.current) {
+      chestBone.current.updateWorldMatrix(true, false);
+      scratchA.setFromMatrixPosition(chestBone.current.matrixWorld);
+      root.current.worldToLocal(scratchA);
+      suitRef.current.position.subVectors(scratchA, chestRest.current);
     }
   });
 
   return (
-    <group
-      ref={root}
-      position={[moodAnchors.intro, GROUND_Y, 0]}
-      scale={mood === 'work' ? 0.76 : 0.92}
-    >
-      <primitive object={model} />
-      <SuitDetails />
+    <group ref={root} position={[moodAnchors.intro, GROUND_Y, 0]} scale={MODEL_SCALE}>
+      <primitive object={scene} />
+      <SuitDetails groupRef={suitRef} />
     </group>
   );
 }
@@ -475,10 +842,15 @@ function Companion({
     const focused = Boolean(focus) && now < focus.until;
 
     // Hover beside the body, then drift toward whatever the visitor is looking at.
+    const atDesk = mood === 'building';
     const anchorX = bodyXRef.current ?? anchorFor(mood, workSide);
     const drift = focused ? focus.x * 0.9 : pointer.x * 0.4;
-    const targetX = anchorX + Math.cos(orbit) * 0.5 + drift;
-    const targetY = GROUND_Y + 1.16 + Math.sin(orbit * 1.2) * 0.16 + pointer.y * 0.2;
+    const targetX = atDesk
+      ? DESK_X + 0.55 + Math.cos(orbit) * 0.12
+      : anchorX + Math.cos(orbit) * 0.5 + drift;
+    const targetY = atDesk
+      ? GROUND_Y + 1.35 + Math.sin(orbit * 1.4) * 0.08
+      : GROUND_Y + 1.16 + Math.sin(orbit * 1.2) * 0.16 + pointer.y * 0.2;
 
     root.current.position.x = THREE.MathUtils.damp(root.current.position.x, targetX, 3.4, delta);
     root.current.position.y = THREE.MathUtils.damp(root.current.position.y, targetY, 3.4, delta);
@@ -514,39 +886,33 @@ function Companion({
     <group ref={root} position={[1.5, GROUND_Y + 1.16, -0.15]} scale={0.7}>
       <mesh castShadow>
         <sphereGeometry args={[0.22, 32, 24]} />
-        <meshStandardMaterial
-          color="#e2fbff"
-          emissive="#67e8f9"
-          emissiveIntensity={0.28}
-          metalness={0.18}
-          roughness={0.28}
-        />
+        <meshBasicMaterial color="#b8f4ff" toneMapped={false} />
       </mesh>
       <mesh position={[0, -0.02, 0.201]}>
         <circleGeometry args={[0.142, 32]} />
-        <meshStandardMaterial color="#7dd3fc" emissive="#0891b2" emissiveIntensity={0.22} />
+        <meshBasicMaterial color="#38bdf8" toneMapped={false} />
       </mesh>
       <group ref={face} position={[0, 0.02, 0.226]}>
         <mesh position={[-0.052, 0.024, 0]}>
           <sphereGeometry args={[0.023, 16, 12]} />
-          <meshBasicMaterial color="#07101a" />
+          <meshBasicMaterial color="#07101a" toneMapped={false} />
         </mesh>
         <mesh position={[0.052, 0.024, 0]}>
           <sphereGeometry args={[0.023, 16, 12]} />
-          <meshBasicMaterial color="#07101a" />
+          <meshBasicMaterial color="#07101a" toneMapped={false} />
         </mesh>
         <mesh position={[0, -0.046, 0]} rotation={[0, 0, Math.PI]}>
           <torusGeometry args={[0.037, 0.008, 10, 24, Math.PI]} />
-          <meshBasicMaterial color="#07101a" />
+          <meshBasicMaterial color="#07101a" toneMapped={false} />
         </mesh>
       </group>
       <mesh position={[-0.215, 0.02, 0]} rotation={[0, 0, -0.62]}>
         <capsuleGeometry args={[0.033, 0.12, 6, 12]} />
-        <meshStandardMaterial color="#a5b4fc" emissive="#6366f1" emissiveIntensity={0.34} />
+        <meshBasicMaterial color="#a5b4fc" toneMapped={false} />
       </mesh>
       <mesh position={[0.215, 0.02, 0]} rotation={[0, 0, 0.62]}>
         <capsuleGeometry args={[0.033, 0.12, 6, 12]} />
-        <meshStandardMaterial color="#a5b4fc" emissive="#6366f1" emissiveIntensity={0.34} />
+        <meshBasicMaterial color="#a5b4fc" toneMapped={false} />
       </mesh>
     </group>
   );
@@ -566,15 +932,11 @@ function GroundShadow({ bodyXRef }: { bodyXRef: RefObject<number> }) {
   });
 
   return (
-    <group ref={holder}>
-      <ContactShadows
-        position={[0, GROUND_Y + 0.005, 0]}
-        scale={2.6}
-        opacity={0.78}
-        blur={1.9}
-        far={2.4}
-        resolution={512}
-      />
+    <group ref={holder} position={[0, GROUND_Y + 0.01, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+      <mesh>
+        <circleGeometry args={[0.55, 32]} />
+        <meshBasicMaterial color="#000000" transparent opacity={0.35} depthWrite={false} />
+      </mesh>
     </group>
   );
 }
@@ -619,16 +981,115 @@ function KineticForms({ pointerRef }: { pointerRef: RefObject<{ x: number; y: nu
   );
 }
 
+function CodingDesk({ mood }: { mood: Mood }) {
+  const root = useRef<Group>(null);
+  const screen = useRef<THREE.MeshStandardMaterial>(null);
+  const visible = useRef(mood === 'building' ? 1 : 0);
+
+  useFrame((state, delta) => {
+    if (!root.current) return;
+    visible.current = THREE.MathUtils.damp(
+      visible.current,
+      mood === 'building' ? 1 : 0,
+      mood === 'building' ? 3.2 : 9,
+      delta,
+    );
+    const amount = visible.current;
+    root.current.visible = amount > 0.04;
+    if (mood !== 'building' && amount < 0.05) {
+      root.current.visible = false;
+      visible.current = 0;
+    }
+    root.current.scale.setScalar(0.72 + amount * 0.28);
+    root.current.position.y = GROUND_Y + (1 - amount) * -0.35;
+
+    if (screen.current) {
+      screen.current.emissiveIntensity = 0.35 + Math.sin(state.clock.elapsedTime * 3.2) * 0.18;
+    }
+  });
+
+  return (
+    /* Anchored on the seat and yawed with the character, so "in front of him" is
+       always +Z here regardless of how the workstation is angled to the camera. */
+    <group ref={root} position={[DESK_X, GROUND_Y, SEAT_Z]} rotation={[0, DESK_FACING, 0]}>
+      {/* Desk height is set against the seated hip line (~0.36), not standing height. */}
+      <mesh position={[0, 0.6, 0.56]}>
+        <boxGeometry args={[1.05, 0.05, 0.58]} />
+        <meshStandardMaterial color="#1c2433" roughness={0.55} />
+      </mesh>
+      {[
+        [-0.45, 0.29, 0.34],
+        [0.45, 0.29, 0.34],
+        [-0.45, 0.29, 0.78],
+        [0.45, 0.29, 0.78],
+      ].map((pos) => (
+        <mesh key={pos.join('-')} position={pos as [number, number, number]}>
+          <boxGeometry args={[0.05, 0.58, 0.05]} />
+          <meshStandardMaterial color="#121821" roughness={0.7} />
+        </mesh>
+      ))}
+
+      {/* Monitor across the desk, screen turned back toward the seat */}
+      <group position={[0, 0, 0.68]} rotation={[0, Math.PI, 0]}>
+        <mesh position={[0, 0.85, 0]}>
+          <boxGeometry args={[0.5, 0.31, 0.04]} />
+          <meshStandardMaterial color="#0b1018" roughness={0.4} />
+        </mesh>
+        <mesh position={[0, 0.85, 0.022]}>
+          <planeGeometry args={[0.44, 0.25]} />
+          <meshStandardMaterial
+            ref={screen}
+            color="#07131f"
+            emissive="#38bdf8"
+            emissiveIntensity={0.45}
+            roughness={0.35}
+          />
+        </mesh>
+        <mesh position={[0, 0.69, 0]}>
+          <boxGeometry args={[0.08, 0.1, 0.05]} />
+          <meshStandardMaterial color="#151c28" />
+        </mesh>
+      </group>
+
+      <mesh position={[0, 0.64, 0.4]}>
+        <boxGeometry args={[0.4, 0.025, 0.15]} />
+        <meshStandardMaterial color="#0f1520" roughness={0.45} />
+      </mesh>
+      <mesh position={[0.28, 0.64, 0.42]}>
+        <boxGeometry args={[0.07, 0.02, 0.11]} />
+        <meshStandardMaterial color="#182030" />
+      </mesh>
+
+      {/* Chair straddling the seat origin, backrest behind the character */}
+      <mesh position={[0, 0.34, 0]}>
+        <boxGeometry args={[0.44, 0.06, 0.44]} />
+        <meshStandardMaterial color="#161d2a" roughness={0.65} />
+      </mesh>
+      <mesh position={[0, 0.64, -0.24]}>
+        <boxGeometry args={[0.44, 0.52, 0.06]} />
+        <meshStandardMaterial color="#121821" roughness={0.7} />
+      </mesh>
+      <mesh position={[0, 0.17, 0]}>
+        <cylinderGeometry args={[0.05, 0.08, 0.34, 10]} />
+        <meshStandardMaterial color="#0d121a" metalness={0.4} roughness={0.4} />
+      </mesh>
+    </group>
+  );
+}
+
 function Scene(props: SceneInput) {
   return (
     <>
-      <ambientLight intensity={0.56} />
-      <directionalLight position={[3, 4.2, 3]} intensity={1.45} castShadow />
-      <pointLight position={[-3, 1, 2]} intensity={8} distance={8} color="#67e8f9" />
-      <pointLight position={[3, 1, -1]} intensity={6} distance={8} color="#818cf8" />
-      <Environment preset="city" />
-      <Character {...props} />
+      <ambientLight intensity={2.2} />
+      <directionalLight position={[1.6, 4.2, 5.2]} intensity={2.8} />
+      <directionalLight position={[-2.4, 3.2, 3.4]} intensity={1.4} color="#d7e6ff" />
+      <pointLight position={[1.45, 2.3, 2.6]} intensity={1.8} distance={10} color="#eef5ff" />
+      <hemisphereLight args={['#f0f6ff', '#10182c', 1.0]} />
+      <Suspense fallback={null}>
+        <Character {...props} />
+      </Suspense>
       <Companion {...props} />
+      <CodingDesk mood={props.mood} />
       <GroundShadow bodyXRef={props.bodyXRef} />
       <KineticForms pointerRef={props.pointerRef} />
     </>
@@ -636,8 +1097,9 @@ function Scene(props: SceneInput) {
 }
 
 const moodLines: Record<Mood, string[]> = {
-  intro: ['Welcome — take a look around.', 'Start wherever you like.'],
+  intro: ['Welcome - take a look around.', 'Start wherever you like.'],
   work: ['Six builds, one standard.', 'Shipped, not theoretical.', 'Depth over volume.'],
+  building: ['At the desk right now.', 'This is what is in flight.', 'Still shipping.'],
   experience: [
     'Built under real constraints.',
     'Production, not prototypes.',
@@ -646,7 +1108,7 @@ const moodLines: Record<Mood, string[]> = {
   about: ['The thinking behind the work.', 'Clarity is the whole craft.'],
   skills: ['Tools change, judgment compounds.', 'Chosen per problem.'],
   proof: ['Sharpened under pressure.', 'Consistency, measured.'],
-  contact: ['Open to the right team.', 'Let’s build something useful.'],
+  contact: ["Open to the right team.", "Let's build something useful."],
 };
 
 const greetLines = [
@@ -666,11 +1128,11 @@ const petLines = [
 const surpriseLines = [
   'Five-second dance break.',
   'You found the party button.',
-  'Curiosity unlocked — let’s move.',
+  "Curiosity unlocked - let's move.",
 ];
 
 const focusLines = [
-  (label: string) => `${label} — worth a look.`,
+  (label: string) => `${label} - worth a look.`,
   (label: string) => `Ask me about ${label}.`,
   () => 'Real users hit this one.',
   () => 'That one took a while.',
@@ -689,6 +1151,7 @@ export function ScrollWorld() {
   const [workSide, setWorkSide] = useState(1);
   const [message, setMessage] = useState({ text: '', visible: false });
   const [giftOpen, setGiftOpen] = useState(false);
+  const [mounted, setMounted] = useState(false);
 
   const dragYawRef = useRef(0);
   const bodyXRef = useRef(moodAnchors.intro);
@@ -698,6 +1161,10 @@ export function ScrollWorld() {
   const orbHitRef = useRef<HTMLButtonElement>(null);
   const bubbleRef = useRef<HTMLDivElement>(null);
   const lastLine = useRef('');
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   useEffect(() => {
     const onMove = (event: PointerEvent) => {
@@ -721,6 +1188,7 @@ export function ScrollWorld() {
     const chapters: Array<{ selector: string; mood: Mood }> = [
       { selector: '#hero', mood: 'intro' },
       { selector: '#featured', mood: 'work' },
+      { selector: '#building', mood: 'building' },
       { selector: '#experience', mood: 'experience' },
       { selector: '#about', mood: 'about' },
       { selector: '#skills', mood: 'skills' },
@@ -764,9 +1232,13 @@ export function ScrollWorld() {
     update();
     window.addEventListener('scroll', update, { passive: true });
     window.addEventListener('resize', update);
+    window.addEventListener('hashchange', update);
+    // Hash loads (e.g. #building) scroll without always firing scroll.
+    requestAnimationFrame(update);
     return () => {
       window.removeEventListener('scroll', update);
       window.removeEventListener('resize', update);
+      window.removeEventListener('hashchange', update);
     };
   }, []);
 
@@ -910,20 +1382,38 @@ export function ScrollWorld() {
     return () => cancelAnimationFrame(id);
   }, []);
 
-  if (disableHeavy3D) return null;
+  if (!mounted || disableHeavy3D) return null;
 
   const world = (
     <div
-      className="fixed inset-0 z-[2] hidden pointer-events-none md:block"
+      className="pointer-events-none fixed inset-0 z-[15] hidden md:block"
       aria-hidden="true"
       data-scene-mood={mood}
       data-work-side={workSide}
     >
       <Canvas
-        shadows
+        key="portfolio-scroll-world"
         camera={{ position: [0.4, 0.5, 4.9], fov: 31, near: 0.1, far: 40 }}
-        dpr={[1, 1.45]}
-        gl={{ antialias: true, alpha: true, powerPreference: 'high-performance' }}
+        dpr={[1, 1.75]}
+        style={{ pointerEvents: 'none', width: '100%', height: '100%' }}
+        gl={{
+          antialias: true,
+          alpha: true,
+          powerPreference: 'high-performance',
+          preserveDrawingBuffer: true,
+          failIfMajorPerformanceCaveat: false,
+        }}
+        onCreated={({ gl, scene, camera }) => {
+          gl.setClearColor(0x000000, 0);
+          gl.toneMappingExposure = 1.45;
+          gl.domElement.style.background = 'transparent';
+          gl.domElement.style.pointerEvents = 'none';
+          (window as unknown as { __portfolio3d?: unknown }).__portfolio3d = {
+            gl,
+            scene,
+            camera,
+          };
+        }}
       >
         <Suspense fallback={null}>
           <Scene
@@ -937,14 +1427,13 @@ export function ScrollWorld() {
           />
         </Suspense>
       </Canvas>
-
     </div>
   );
 
-  /* Page sections sit at z-10, so anything the visitor must see or click has to
-     live in its own layer above them. */
+  /* Canvas paints above the page; this overlay only hosts small hit targets.
+     Keep it pointer-events-none so forms stay clickable. */
   const overlay = (
-    <div className="pointer-events-none fixed inset-0 z-[45] hidden md:block" data-character-ui>
+    <div className="pointer-events-none fixed inset-0 z-[16] hidden md:block" data-character-ui>
       <button
         ref={orbHitRef}
         type="button"
@@ -952,7 +1441,9 @@ export function ScrollWorld() {
         data-cursor
         aria-label="Pet the companion"
         onClick={() => emit({ kind: 'pet' })}
-        className="group pointer-events-auto absolute left-0 top-0 h-[78px] w-[78px] rounded-full border border-cyan-200/20 bg-cyan-200/[0.025] transition-colors hover:border-cyan-200/65 hover:bg-cyan-200/[0.08]"
+        className={`group absolute left-0 top-0 h-[78px] w-[78px] rounded-full border border-cyan-200/20 bg-cyan-200/[0.025] transition-colors hover:border-cyan-200/65 hover:bg-cyan-200/[0.08] ${
+          mood === 'contact' ? 'pointer-events-none opacity-0' : 'pointer-events-auto'
+        }`}
       >
         <span className="absolute inset-2 animate-ping rounded-full border border-cyan-200/15 [animation-duration:2.4s]" />
         <span className="absolute left-1/2 top-[calc(100%+6px)] -translate-x-1/2 whitespace-nowrap rounded-full border border-white/10 bg-[#080b12]/90 px-2 py-1 text-[8px] uppercase tracking-[0.2em] text-cyan-100/70 opacity-70 transition-opacity group-hover:opacity-100">
@@ -1021,7 +1512,7 @@ export function ScrollWorld() {
             <div className="p-5">
               <p className="display-title text-xl text-white">You found the hidden layer.</p>
               <p className="mt-2 text-xs leading-relaxed text-white/50">
-                Gift unlocked — the character dances for five seconds while the companion
+                Gift unlocked - the character dances for five seconds while the companion
                 celebrates. Press G anytime to replay the moment.
               </p>
               <div className="mt-4 flex items-center justify-between rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2.5">
@@ -1046,10 +1537,11 @@ export function ScrollWorld() {
     </div>
   );
 
-  return (
+  return createPortal(
     <>
       {world}
       {overlay}
-    </>
+    </>,
+    document.body,
   );
 }

@@ -1,6 +1,7 @@
 import { themes } from './data/portfolio';
 import { About } from './components/sections/About';
 import { Achievements } from './components/sections/Achievements';
+import { Building } from './components/sections/Building';
 import { Coding } from './components/sections/Coding';
 import { Education } from './components/sections/Education';
 import { Experience } from './components/sections/Experience';
@@ -13,6 +14,7 @@ import { Responsibility } from './components/sections/Responsibility';
 import { Skills } from './components/sections/Skills';
 import { Nav } from './components/ui/Nav';
 import { ScrollWorld } from './components/ScrollWorld';
+import { SceneErrorBoundary } from './components/SceneErrorBoundary';
 import { InteractionLayer } from './components/InteractionLayer';
 import { StatementBand } from './components/StatementBand';
 
@@ -21,12 +23,15 @@ function App() {
 
   return (
     <div className="studio-shell min-h-screen overflow-x-hidden text-white">
-      <ScrollWorld />
+      <SceneErrorBoundary>
+        <ScrollWorld />
+      </SceneErrorBoundary>
       <InteractionLayer />
       <Nav theme={theme} />
       <main className="relative z-10">
         <Hero theme={theme} />
         <FeaturedProjects theme={theme} />
+        <Building theme={theme} />
         <StatementBand
           eyebrow="Systems with a point of view"
           lineOne="Build for reality."

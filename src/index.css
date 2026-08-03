@@ -75,7 +75,7 @@ body {
 }
 
 .studio-hero {
-  background: linear-gradient(90deg, rgba(7, 9, 15, 0.96) 0%, rgba(7, 9, 15, 0.82) 42%, rgba(7, 9, 15, 0.2) 72%);
+  background: linear-gradient(90deg, rgba(7, 9, 15, 0.96) 0%, rgba(7, 9, 15, 0.72) 38%, rgba(7, 9, 15, 0.08) 68%, transparent 82%);
 }
 
 .studio-noise {

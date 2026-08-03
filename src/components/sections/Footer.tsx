@@ -107,7 +107,7 @@ export function Footer({ theme }: Props) {
 
           <form
             onSubmit={onSubmit}
-            className="rounded-[1.75rem] border border-white/10 bg-[#080b12]/72 p-6 shadow-2xl backdrop-blur-xl md:p-7"
+            className="relative z-30 rounded-[1.75rem] border border-white/10 bg-[#080b12]/92 p-6 shadow-2xl backdrop-blur-xl md:p-7"
           >
             <div className="mb-5 flex items-center justify-between">
               <div>
