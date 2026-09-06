@@ -30,9 +30,9 @@ export const contact = {
   whatsapp: '+91-8544312081',
   github: 'https://github.com/Swetabh48',
   githubUser: 'Swetabh48',
-  linkedin: 'https://linkedin.com/in/swetabh-salampuria',
+  linkedin: 'https://www.linkedin.com/in/swetabh-salampuria-baa112284/',
   resume:
-    'https://drive.google.com/file/d/1Tyjy5hwghXVmXtLOp7ivPEfmwdZr00S6/view?usp=sharing',
+    'https://drive.google.com/file/d/1xETpBfPwY5vwmN1fOM_9bLwxrjthz-SS/view?usp=sharing',
   tagline: 'Software Engineer · Full Stack & AI Systems',
   availability: 'Open to full-time software engineering roles',
 };
@@ -41,7 +41,7 @@ export const about = {
   paragraphs: [
     'I am a Software Engineer focused on building production systems that blend modern web architecture, practical AI, and clean interfaces. Currently at Wavexcel Technologies on a Siemens Energy engagement, I work on proposal workflows, document intelligence, and client-facing delivery systems.',
     'My background combines a B.Tech at MNNIT Allahabad with a Computer Science minor, competitive programming discipline, and hands-on product building across marketplaces, ML visualization, real-time collaboration, and regulated-domain platforms.',
-    'I care about clarity, measurable outcomes, and software that survives contact with real users—not just demos that look good in slides.',
+    'I care about clarity, measurable outcomes, and software that survives contact with real users and not just demos that look good in slides.',
   ],
 };
 
@@ -81,21 +81,71 @@ export const experience = [
     company: 'Wavexcel Technologies Pvt. Ltd.',
     client: 'Siemens Energy Ltd.',
     location: 'Gurugram, Haryana',
-    period: 'January 2026 – Present',
+    period: 'January 2026 – July 2026',
     bullets: [
-      'Designed a stage-aware proposal workflow that replaced conflicting state with a single reliable source of truth.',
-      'Converted configuration inputs into structured BOM outputs, removing a manual and error-prone compilation step.',
-      'Rebuilt domain fields around shared model references so future changes propagate instead of breaking hardcoded paths.',
-      'Owned six execution-domain capabilities end-to-end, from interface behavior to backend business rules.',
-      'Turned a rigid 95-field catalog into an AI-learned schema pipeline using FastAPI and Azure OpenAI.',
-      'Built a formula cascade that computes 179 datasheet cells from 31 drivers and passed all 17 validation scenarios.',
-      'Shipped asynchronous jobs, live SSE progress, and Excel/HTML/PDF exports to a production .NET MAUI client.',
-      'Combined PaddleOCR and Hermes vision loops to reconstruct editable HTML datasheets from real-world PDFs.',
+      'Designed a few-shot Azure OpenAI extraction pipeline (Python/FastAPI) that inferred a 95-field schema from 15–20 labeled samples, replacing a brittle hardcoded field catalog.',
+      'Shipped async FastAPI job APIs with SSE progress streaming and Excel/HTML/PDF export for a production .NET MAUI Windows client, keeping long-running work off the request path.',
+      'Built an iterative OCR + AI-vision correction loop (PaddleOCR, Hermes) that reconstructed structured HTML layouts from unstructured PDFs.',
+      'Implemented a formula-driven computation engine mapping 31 input drivers to 179 dependent outputs; validated with a 17-case suite at 100% pass rate.',
+      'Built a multi-agent LOS GenAI pipeline (planning agent → doc/extract agent → formula backbone): the planner acts as a readiness gate and writes a project plan of record; the doc agent extracts only bound drivers from staged sources, then calculates and fills HTML/Excel/PDF datasheets.',
+      'Shipped a confidence-gated review UI that surfaced low-certainty extractions first, cutting manual scan time by letting reviewers jump straight to uncertain fields.',
+      'Built versioned client configuration (schema + computation profiles) so new Siemens project templates could be onboarded without redeploying the Windows app.',
+      'Added end-to-end job observability (queued → OCR → extract → compute → export) with retryable stages and actionable failure states in the MAUI client.',
     ],
   },
 ];
 
 export const featuredProjects: FeaturedProject[] = [
+  {
+    title: 'SpeakEasy',
+    role: 'AI speech & interview practice',
+    description:
+      'A browser-based speech and essay practice studio with Whisper transcription, a tiered evaluator, combinatorial topics across eight modes, and a FastAPI board-interview agent loop—zero-account, local-storage-only.',
+    tech: ['Next.js', 'React', 'TypeScript', 'FastAPI', 'SQLite', 'PostgreSQL'],
+    highlights: [
+      'In-browser Whisper + tiered evaluator (hosted LLM → Ollama → heuristic grader)',
+      'Combinatorial topic engine across 8 practice modes with local fingerprinting',
+      'UPSC/IES/IFS board-interview agents with RSS current-affairs and adaptive cross-questioning',
+      'Client-side proctoring and growth dashboard on local-storage-only architecture',
+    ],
+    github: 'https://github.com/Swetabh48/SpeakEasy',
+    live: 'https://speakeasy-two-peach.vercel.app',
+    gradient: 'from-amber-400 via-orange-500 to-rose-500',
+    source: 'resume',
+  },
+  {
+    title: 'MealDeal',
+    role: 'AI product experience',
+    description:
+      'A personalized nutrition product that turns goals and medical constraints into meals, groceries, workouts, and contextual AI guidance—with async Gemini jobs and a hardened QA suite.',
+    tech: ['Next.js', 'TypeScript', 'Gemini', 'MongoDB', 'NextAuth', 'Zod'],
+    highlights: [
+      'Two-stage async Gemini pipeline with job-polling off the request path',
+      'Menu OCR, doctor chat, meal swaps, and Zod-enforced LLM output',
+      'NextAuth (credentials + Google), MongoDB, and Zod-validated APIs',
+      '746-assertion QA suite: 84/84 feature checks, 97.7% pass under 100-user load',
+    ],
+    github: 'https://github.com/Swetabh48/MealDeal',
+    live: 'https://meal-deal-zeta.vercel.app',
+    gradient: 'from-emerald-400 via-teal-500 to-cyan-500',
+    source: 'resume',
+  },
+  {
+    title: 'Attest',
+    role: 'Grounded RAG over SEC filings',
+    description:
+      'A Dockerized ingest and query pipeline over SEC 10-K / 10-Q filings with hybrid retrieval, claim-level grounding, and an evaluation harness so answers cite source sections instead of improvising.',
+    tech: ['Python', 'FastAPI', 'PostgreSQL', 'pgvector', 'Docker'],
+    highlights: [
+      'Postgres job queues with SKIP LOCKED workers over ~38 SEC filings',
+      'Hybrid retrieval (FTS + vector via RRF) with reranking and a weak-context gate',
+      '40-question eval harness; Hit@5 improved 57.5% → 60.0% vs vector-only',
+      'Claim-level grounding classifier (93.3% accuracy) with citation-constrained generation',
+    ],
+    github: 'https://github.com/Swetabh48/Attest',
+    gradient: 'from-sky-400 via-indigo-500 to-blue-700',
+    source: 'resume',
+  },
   {
     title: 'BitHaven',
     role: 'Full-stack marketplace',
@@ -128,73 +178,6 @@ export const featuredProjects: FeaturedProject[] = [
     github: 'https://github.com/Swetabh48/Audio-CNN',
     gradient: 'from-violet-500 via-fuchsia-500 to-pink-500',
     source: 'resume',
-  },
-  {
-    title: 'IdeaFlow',
-    role: 'Real-time collaboration',
-    description:
-      'A collaborative whiteboard for teams to sketch and plan together with low-latency sync, layered canvas tools, and secure authentication.',
-    tech: ['Next.js', 'TypeScript', 'Liveblocks', 'Convex', 'Clerk', 'Zustand'],
-    highlights: [
-      '8 Convex API endpoints with sub-110ms responses',
-      'Sync latency under 50ms with reduced load times',
-      '7-tool canvas with 100-layer collaboration support',
-      'Enterprise authentication with Clerk',
-    ],
-    github: 'https://github.com/Swetabh48/IdeaFlow',
-    live: 'https://idea-flow-theta.vercel.app',
-    gradient: 'from-purple-500 via-pink-500 to-rose-500',
-    source: 'github',
-  },
-  {
-    title: 'MealDeal',
-    role: 'AI product experience',
-    description:
-      'A personalized nutrition product that turns goals and medical constraints into meals, groceries, workouts, and contextual AI guidance.',
-    tech: ['Next.js', 'TypeScript', 'Gemini', 'MongoDB', 'NextAuth'],
-    highlights: [
-      'Personalized plans from user constraints',
-      'AI doctor chat for menu-related guidance',
-      'Grocery and workout planning in one workflow',
-      'Production deploy with auth and persistence',
-    ],
-    github: 'https://github.com/Swetabh48/MealDeal',
-    live: 'https://meal-deal-zeta.vercel.app',
-    gradient: 'from-emerald-400 via-teal-500 to-cyan-500',
-    source: 'github',
-  },
-  {
-    title: 'HirePath',
-    role: 'Voice AI platform',
-    description:
-      'A voice-first interview practice platform that creates realistic conversation pressure and turns sessions into actionable evaluation feedback.',
-    tech: ['TypeScript', 'Vapi', 'Firebase', 'AI SDK', 'Next.js'],
-    highlights: [
-      'Real-time AI voice interview sessions',
-      'Firebase-backed candidate and session flow',
-      'Modern AI SDKs for conversational evaluation',
-      'Live end-to-end interview practice demo',
-    ],
-    github: 'https://github.com/Swetabh48/HirePath',
-    live: 'https://hire-path-three.vercel.app/',
-    gradient: 'from-amber-400 via-orange-500 to-red-500',
-    source: 'github',
-  },
-  {
-    title: 'Fuel-Machine',
-    role: 'Domain engineering',
-    description:
-      'A compliance engine for FuelEU Maritime regulation—modeling emissions, compliance balance, banking, and pooling with maintainable architecture.',
-    tech: ['TypeScript', 'React', 'Node.js', 'PostgreSQL'],
-    highlights: [
-      'Models EU Maritime Regulation (EU) 2023/1805',
-      'Route GHG and compliance balance calculations',
-      'Banking and pooling workflows',
-      'Hexagonal architecture for evolving domain rules',
-    ],
-    github: 'https://github.com/Swetabh48/Fuel-Machine',
-    gradient: 'from-sky-400 via-indigo-500 to-blue-700',
-    source: 'github',
   },
 ];
 
@@ -277,7 +260,11 @@ export const extracurricular = {
 };
 
 export const githubPreferredOrder = [
+  'SpeakEasy',
   'MealDeal',
+  'Attest',
+  'BitHaven',
+  'Audio-CNN',
   'HirePath',
   'Fuel-Machine',
   'MedLog',
@@ -286,8 +273,6 @@ export const githubPreferredOrder = [
   'HealthGuru',
   'PropertyHub',
   'IdeaFlow',
-  'BitHaven',
-  'Audio-CNN',
   'WeConnect',
 ];
 
@@ -330,13 +315,6 @@ export const upcomingProjects: UpcomingProject[] = [
     blurb:
       'An agent-style developer tool with streaming replies and tool calling. Bun monorepo spanning a CLI and server — still moving fast, aimed at feeling useful in a real terminal workflow rather than a demo chat box.',
     focus: ['TypeScript', 'Agents', 'Tool calling', 'Bun'],
-  },
-  {
-    title: 'Attest',
-    status: 'In progress',
-    blurb:
-      'Grounded answers over SEC 10-K / 10-Q filings. Hybrid retrieval (vector + Postgres FTS), semantic caching, and evaluation so the model has to point at source sections instead of improvising.',
-    focus: ['RAG', 'Embeddings', 'Python', 'Eval'],
   },
   {
     title: 'MailSender',
